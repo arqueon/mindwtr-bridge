@@ -9,6 +9,7 @@
 const { decideFieldSync, equalValue } = require('./lib/field-sync');
 const gtd = require('./gtd-mapping');
 const model = require('./mindwtr-model');
+const { runCaptureLane } = require('./capture');
 const { withAdvisoryLock } = require('./lib/database');
 const { sha256 } = require('./lib/canonical');
 
@@ -103,7 +104,7 @@ async function ensureGtdLabels(vikunja, log) {
 
 // --- Ciclo ----------------------------------------------------------------
 
-async function runCycle({ config, pool, vikunja, webdav, dryRun = false, now = new Date(), log = () => {} }) {
+async function runCycle({ config, pool, vikunja, webdav, atvkPool = null, anytype = null, dryRun = false, now = new Date(), log = () => {} }) {
   return withAdvisoryLock(pool, LOCK_KEY, async (db) => {
     const nowIso = now.toISOString();
     const run = {
@@ -200,6 +201,9 @@ async function runCycle({ config, pool, vikunja, webdav, dryRun = false, now = n
       return area.id;
     };
 
+    // Rellenado tras la enumeración por el carril de captura (v2).
+    let captureResult = { adoptTask: new Map(), adoptProject: new Map(), created: 0 };
+
     const destinationFor = (vikunjaProjectId) => {
       const entry = subtreeEntry.get(vikunjaProjectId);
       if (!entry) return { projectId: null, areaId: null };
@@ -213,6 +217,28 @@ async function runCycle({ config, pool, vikunja, webdav, dryRun = false, now = n
           areaFor(entry.container); // refresca también el nombre del área
         }
         return { projectId: existing.mindwtr_project_id, areaId: null };
+      }
+      // Adopción de captura mindwtr: el proyecto Vikunja recién materializado
+      // por atvk corresponde a un proyecto que YA existe en Mindwtr — se
+      // enlaza en vez de crear un espejo duplicado.
+      const adoptProject = captureResult.adoptProject.get(entry.project.id);
+      if (adoptProject && !dryRun) {
+        const row = {
+          vikunja_project_id: entry.project.id,
+          mindwtr_project_id: adoptProject.mindwtrId,
+          area_vikunja_project_id: entry.container.id,
+          display_name: entry.project.title,
+        };
+        projectByVikunja.set(entry.project.id, row);
+        pendingProjectInserts.push(row);
+        run.detail.actions.push({ type: 'capture_adopt', kind: 'project', vikunja_project_id: entry.project.id, title: entry.project.title });
+        dbUpserts.push(async (client) => {
+          await client.query(
+            "UPDATE capture_map SET state = 'adopted', vikunja_id = $2, updated_at = now() WHERE id = $1",
+            [adoptProject.captureId, entry.project.id],
+          );
+        });
+        return { projectId: adoptProject.mindwtrId, areaId: null };
       }
       if (dryRun) return { projectId: `<project:${entry.project.title}>`, areaId: null };
       const areaId = areaFor(entry.container);
@@ -248,6 +274,29 @@ async function runCycle({ config, pool, vikunja, webdav, dryRun = false, now = n
 
     const mirrorById = new Map(data.tasks.map((task) => [task.id, task]));
     const pilotFilter = new Set((config.pilot_task_ids ?? []).map(Number));
+
+    // Carril de captura v2: da a luz en Anytype lo nacido en Mindwtr/Vikunja
+    // y prepara las adopciones que la fase de plan consume.
+    try {
+      captureResult = await runCaptureLane({
+        config,
+        db,
+        atvkDb: atvkPool,
+        anytype,
+        vikunja,
+        data,
+        bridge: { mappingByVikunja, areaByVikunja, projectByVikunja },
+        subtree: { subtreeEntry, scopedProjectIds, children, containers },
+        vikunjaTasks,
+        dryRun,
+        now,
+        warn,
+        actions: run.detail.actions,
+      });
+    } catch (error) {
+      run.status = 'partial';
+      warn(`Carril de captura falló: ${error.message}`);
+    }
 
     // 6. Plan por tarea.
     const vikunjaWriteQueue = [];  // {task, changes}
@@ -300,8 +349,41 @@ async function runCycle({ config, pool, vikunja, webdav, dryRun = false, now = n
         if (mapping.state === 'dismissed') continue;
       }
 
-      // Sin mapeo → candidata a espejo nuevo (solo pendientes; respeta piloto).
+      // Sin mapeo → adopción de captura o candidata a espejo nuevo.
       if (!mapping) {
+        // Adopción (captura mindwtr): la tarea Vikunja recién creada por atvk
+        // corresponde a un espejo que YA existe — se enlaza sin duplicar.
+        const adopt = captureResult.adoptTask.get(vikunjaTaskId);
+        if (adopt) {
+          const adoptDestination = destinationFor(task.project_id);
+          const { snapshot: adoptSnap } = vikunjaLogicalSnapshot(task, {
+            timezone: config.timezone,
+            destination: adoptDestination,
+          });
+          run.detail.actions.push({ type: 'capture_adopt', kind: 'task', vikunja_task_id: vikunjaTaskId, title: task.title });
+          if (!dryRun) {
+            dbUpserts.push(async (client) => {
+              await client.query(
+                'INSERT INTO task_map (vikunja_task_id, mindwtr_task_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+                [vikunjaTaskId, adopt.mindwtrId],
+              );
+              for (const [field, value] of Object.entries(adoptSnap)) {
+                await client.query(
+                  `INSERT INTO task_field_state
+                     (vikunja_task_id, field_name, last_vikunja_value, last_mindwtr_value, last_common_value, last_origin)
+                   VALUES ($1, $2, $3::jsonb, $3::jsonb, $3::jsonb, 'bootstrap')
+                   ON CONFLICT (vikunja_task_id, field_name) DO NOTHING`,
+                  [vikunjaTaskId, field, JSON.stringify(value ?? null)],
+                );
+              }
+              await client.query(
+                "UPDATE capture_map SET state = 'adopted', vikunja_id = $2, updated_at = now() WHERE id = $1",
+                [adopt.captureId, vikunjaTaskId],
+              );
+            });
+          }
+          continue;
+        }
         if (task.done) continue;
         if (pilotFilter.size > 0 && !pilotFilter.has(vikunjaTaskId)) continue;
         const destination = destinationFor(task.project_id);

@@ -100,6 +100,13 @@ class VikunjaClient {
     })).data;
   }
 
+  async updateProject(projectId, project) {
+    return (await this.request(`projects/${projectId}`, {
+      method: 'POST',
+      body: project,
+    })).data;
+  }
+
   async listLabels() {
     return this.listPaginated('labels');
   }

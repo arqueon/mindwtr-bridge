@@ -203,6 +203,7 @@ module.exports = {
   gtdLabelForStatus,
   isContextLabel,
   isGtdLabel,
+  isVikunjaNullDate,
   mindwtrDateOnly,
   mindwtrPriorityToVikunja,
   normalizeContexts,

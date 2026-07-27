@@ -10,9 +10,11 @@ function makeFakeDb(seed = {}) {
     project_map: seed.project_map ?? [],
     task_map: seed.task_map ?? [],
     task_field_state: seed.task_field_state ?? [],
+    capture_map: seed.capture_map ?? [],
     sync_run: [],
     sync_error: [],
   };
+  let nextCaptureId = state.capture_map.reduce((max, row) => Math.max(max, row.id ?? 0), 0);
 
   const client = {
     state,
@@ -29,7 +31,36 @@ function makeFakeDb(seed = {}) {
       if (text.startsWith('SELECT * FROM task_map')) return { rows: state.task_map };
       if (text.startsWith('SELECT * FROM task_field_state')) return { rows: state.task_field_state };
       if (text.startsWith('INSERT INTO task_map')) {
-        state.task_map.push({ vikunja_task_id: params[0], mindwtr_task_id: params[1], state: 'active' });
+        const exists = state.task_map.some((row) => Number(row.vikunja_task_id) === Number(params[0]));
+        if (!exists) {
+          state.task_map.push({ vikunja_task_id: params[0], mindwtr_task_id: params[1], state: 'active' });
+        }
+        return { rows: [] };
+      }
+      if (text.startsWith('SELECT * FROM capture_map')) return { rows: state.capture_map };
+      if (text.startsWith('INSERT INTO capture_map')) {
+        nextCaptureId += 1;
+        state.capture_map.push({
+          id: nextCaptureId,
+          origin: params[0],
+          kind: params[1],
+          mindwtr_id: params[2],
+          vikunja_id: params[3],
+          anytype_space_id: params[4],
+          anytype_object_id: null,
+          state: 'creating',
+          created_at: new Date().toISOString(),
+        });
+        return { rows: [{ id: nextCaptureId }] };
+      }
+      if (text.startsWith('UPDATE capture_map')) {
+        const match = text.match(/state = '(\w+)'/);
+        const row = state.capture_map.find((item) => Number(item.id) === Number(params[0]));
+        if (row) {
+          row.state = match[1];
+          if (match[1] === 'pending') row.anytype_object_id = params[1];
+          if (match[1] === 'adopted' && params[1] !== undefined) row.vikunja_id = params[1];
+        }
         return { rows: [] };
       }
       if (text.startsWith('UPDATE task_map SET state')) {
@@ -54,7 +85,8 @@ function makeFakeDb(seed = {}) {
         const existing = state.task_field_state.find(
           (item) => Number(item.vikunja_task_id) === Number(params[0]) && item.field_name === params[1],
         );
-        if (existing && text.includes('ON CONFLICT')) Object.assign(existing, record);
+        if (existing && text.includes('DO NOTHING')) { /* conserva */ }
+        else if (existing && text.includes('ON CONFLICT')) Object.assign(existing, record);
         else state.task_field_state.push(record);
         return { rows: [] };
       }
@@ -94,8 +126,53 @@ function makeFakeDb(seed = {}) {
   };
 }
 
+function makeFakeAtvkDb({ channels = [], taskRows = [], projectRows = [] } = {}) {
+  return {
+    async query(sql) {
+      const text = sql.replace(/\s+/g, ' ').trim();
+      if (text.includes('FROM channel_map')) return { rows: channels };
+      if (text.includes('FROM task_map')) return { rows: taskRows };
+      if (text.includes('FROM project_map')) return { rows: projectRows };
+      throw new Error(`fakeAtvkDb: SQL no enrutado: ${text.slice(0, 60)}`);
+    },
+  };
+}
+
+function makeFakeAnytype() {
+  const calls = { createObject: [], updateObject: [], createTag: [] };
+  let nextId = 0;
+  return {
+    calls,
+    async createObject(spaceId, payload) {
+      nextId += 1;
+      const object = { id: `obj-cap-${nextId}`, ...payload };
+      calls.createObject.push({ spaceId, payload, id: object.id });
+      return object;
+    },
+    async getObject() { return { type: { key: 'project' } }; },
+    async updateObject(spaceId, objectId, patch) {
+      calls.updateObject.push({ spaceId, objectId, patch });
+      return { id: objectId };
+    },
+    async listProperties() {
+      return [
+        { id: 'prop-tag', key: 'tag' },
+        { id: 'prop-due', key: 'due_date' },
+        { id: 'prop-linked', key: 'linked_projects' },
+      ];
+    },
+    async listTags() { return []; },
+    async createTag(spaceId, propertyId, tag) {
+      nextId += 1;
+      const created = { id: `tag-cap-${nextId}`, ...tag };
+      calls.createTag.push({ spaceId, propertyId, tag: created });
+      return created;
+    },
+  };
+}
+
 function makeFakeVikunja({ projects, tasksByProject, labels }) {
-  const calls = { updateTask: [], addLabel: [], removeLabel: [], createLabel: [] };
+  const calls = { updateTask: [], addLabel: [], removeLabel: [], createLabel: [], updateProject: [] };
   let nextLabelId = 1000;
   const allLabels = [...labels];
   const flatTasks = new Map();
@@ -120,6 +197,10 @@ function makeFakeVikunja({ projects, tasksByProject, labels }) {
     async updateTask(task, changes) {
       calls.updateTask.push({ taskId: task.id, changes });
       return { ...task, ...changes };
+    },
+    async updateProject(projectId, project) {
+      calls.updateProject.push({ projectId, project });
+      return { id: projectId, ...project };
     },
   };
 }
@@ -146,4 +227,4 @@ const BASE_CONFIG = Object.freeze({
   pilot_task_ids: [],
 });
 
-module.exports = { BASE_CONFIG, makeFakeDb, makeFakeVikunja, makeFakeWebdav };
+module.exports = { BASE_CONFIG, makeFakeAnytype, makeFakeAtvkDb, makeFakeDb, makeFakeVikunja, makeFakeWebdav };
