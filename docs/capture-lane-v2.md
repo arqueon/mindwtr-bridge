@@ -1,6 +1,6 @@
 # Carril de captura (v2) — tareas y proyectos nacidos en Mindwtr O en Vikunja
 
-Diseño aprobado en concepto el 2026-07-26; pendiente de implementación.
+IMPLEMENTADO Y EN PRODUCCIÓN desde el 2026-07-26 (commit 7493227); verificado con adopción real de 3 tareas y 1 proyecto nacidos en Vikunja.
 Objetivo: capturar en Mindwtr **o en Vikunja** y que la tarea/proyecto
 **nazca en Anytype**, entrando después al circuito normal. Vikunja se
 mantiene como hub; la API de Anytype se usa **solo para crear**, no como
