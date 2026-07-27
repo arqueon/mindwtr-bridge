@@ -1,0 +1,11 @@
+[Unit]
+Description=mindwtr-bridge cada 3 minutos
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=3min
+RandomizedDelaySec=20
+Persistent=true
+
+[Install]
+WantedBy=timers.target

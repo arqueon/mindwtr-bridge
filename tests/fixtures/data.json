@@ -1,0 +1,75 @@
+{
+  "areas": [],
+  "people": [
+    {
+      "createdAt": "2026-07-26T22:11:30.238Z",
+      "id": "3588b318-93cb-4ebd-8948-6aebc733b417",
+      "name": "Persona de prueba",
+      "rev": 1,
+      "revBy": "42e3d363-55b6-4c53-9b7e-af5806fade91",
+      "updatedAt": "2026-07-26T22:11:30.238Z"
+    }
+  ],
+  "projects": [
+    {
+      "color": "#94a3b8",
+      "createdAt": "2026-07-24T04:43:50.482Z",
+      "id": "b053368a-06a7-4f73-ad77-61e12d04f702",
+      "isFocused": true,
+      "isSequential": false,
+      "order": 0,
+      "rev": 2,
+      "revBy": "42e3d363-55b6-4c53-9b7e-af5806fade91",
+      "status": "active",
+      "tagIds": [],
+      "title": "Proyecto personal",
+      "updatedAt": "2026-07-24T04:52:00.346Z"
+    }
+  ],
+  "sections": [],
+  "settings": {
+    "syncPreferences": {},
+    "syncPreferencesUpdatedAt": {
+      "appearance": "2026-07-25T07:05:45.429Z"
+    }
+  },
+  "tasks": [
+    {
+      "contexts": [
+        "@work @codex"
+      ],
+      "createdAt": "2026-07-25T03:49:35.839Z",
+      "description": "Tarea personal que el bridge jamás debe tocar.",
+      "dueDate": "2026-07-27",
+      "id": "e3e4294f-192c-4f09-947a-b388846e7313",
+      "isFocusedToday": false,
+      "pushCount": 0,
+      "rev": 5,
+      "revBy": "42e3d363-55b6-4c53-9b7e-af5806fade91",
+      "startTime": "2026-07-25",
+      "status": "next",
+      "campoDesconocidoFuturo": {
+        "conservar": true
+      },
+      "suppressMindwtrReminders": false,
+      "tags": [],
+      "taskMode": "task",
+      "title": "Tarea personal",
+      "updatedAt": "2026-07-25T07:18:24.056Z"
+    },
+    {
+      "completedAt": "2026-07-24T04:33:11.082Z",
+      "contexts": [],
+      "createdAt": "2026-07-24T04:33:24.376Z",
+      "id": "dd751ecb-7715-479c-ba10-54ee26be3aae",
+      "isFocusedToday": false,
+      "pushCount": 0,
+      "rev": 99,
+      "status": "archived",
+      "suppressMindwtrReminders": false,
+      "tags": [],
+      "title": "Tarea personal archivada",
+      "updatedAt": "2026-07-24T04:33:24.376Z"
+    }
+  ]
+}

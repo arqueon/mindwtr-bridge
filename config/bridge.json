@@ -1,0 +1,12 @@
+{
+  "vikunja_base_url": "https://tasks.arqueonautis.org/api/v1",
+  "webdav_url": "https://nextcloud.arqueonautis.org/remote.php/dav/files/arqueon/Mindwtr/data.json",
+  "root_project_title": "ANYTYPE",
+  "no_project_title": "00 · Sin proyecto",
+  "timezone": "America/Mexico_City",
+  "default_due_time": "09:00",
+  "enable_focus": true,
+  "pilot_task_ids": [],
+  "secrets_dir": "secrets",
+  "backup_retention_days": 14
+}

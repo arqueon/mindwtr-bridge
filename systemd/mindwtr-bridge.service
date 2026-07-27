@@ -1,0 +1,13 @@
+[Unit]
+Description=mindwtr-bridge: reconciliación Vikunja[ANYTYPE] ⟷ Mindwtr
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=sinope
+WorkingDirectory=/home/sinope/mindwtr-bridge
+ExecStart=/usr/bin/node src/cli.js reconcile
+# HOME explícito: las unidades sin él rompen herramientas que lo asumen.
+Environment=HOME=/home/sinope
+TimeoutStartSec=120
