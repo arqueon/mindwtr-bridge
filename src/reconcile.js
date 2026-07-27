@@ -171,9 +171,25 @@ async function runCycle({ config, pool, vikunja, webdav, dryRun = false, now = n
     const pendingProjectInserts = [];
     let mindwtrMutated = false;
 
+    // Renombres V→M: si el título en Vikunja (que viene de Anytype) cambió,
+    // el espejo se renombra. Un rename hecho en Mindwtr diverge y se
+    // reconverge aquí (los títulos de áreas/proyectos espejo son del bridge).
+    const renameMirrorEntity = (list, entityId, titleKey, newTitle, kind) => {
+      const entity = model.findById(list, entityId);
+      if (entity && entity[titleKey] !== newTitle) {
+        entity[titleKey] = newTitle;
+        model.touch(entity, deviceUuid, nowIso);
+        mindwtrMutated = true;
+        run.detail.actions.push({ type: `rename_${kind}`, id: entityId, title: newTitle });
+      }
+    };
+
     const areaFor = (container) => {
       const existing = areaByVikunja.get(container.id);
-      if (existing) return existing.mindwtr_area_id;
+      if (existing) {
+        if (!dryRun) renameMirrorEntity(data.areas, existing.mindwtr_area_id, 'name', container.title, 'area');
+        return existing.mindwtr_area_id;
+      }
       if (dryRun) return `<area:${container.title}>`;
       const area = model.ensureArea(data, { name: container.title }, deviceUuid, nowIso);
       const row = { vikunja_project_id: container.id, mindwtr_area_id: area.id, display_name: container.title };
@@ -191,7 +207,13 @@ async function runCycle({ config, pool, vikunja, webdav, dryRun = false, now = n
         return { projectId: null, areaId: areaFor(entry.container) };
       }
       const existing = projectByVikunja.get(entry.project.id);
-      if (existing) return { projectId: existing.mindwtr_project_id, areaId: null };
+      if (existing) {
+        if (!dryRun) {
+          renameMirrorEntity(data.projects, existing.mindwtr_project_id, 'title', entry.project.title, 'project');
+          areaFor(entry.container); // refresca también el nombre del área
+        }
+        return { projectId: existing.mindwtr_project_id, areaId: null };
+      }
       if (dryRun) return { projectId: `<project:${entry.project.title}>`, areaId: null };
       const areaId = areaFor(entry.container);
       const mirror = model.ensureProject(data, { title: entry.project.title, areaId }, deviceUuid, nowIso);
