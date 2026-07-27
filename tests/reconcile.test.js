@@ -31,6 +31,7 @@ function baseTasks() {
     102: [
       { id: 501, project_id: 102, title: 'Tarea suelta', done: false, labels: [], priority: 0 },
       { id: 503, project_id: 102, title: 'Ya hecha', done: true, labels: [] },
+      { id: 504, project_id: 102, title: 'Con fecha sin label', done: false, labels: [], due_date: '2026-08-01T15:00:00Z' },
     ],
     103: [
       {
@@ -78,7 +79,10 @@ test('dry-run: plan de espejos sin escritura alguna', async () => {
 
   assert.equal(result.dry_run, true);
   const creates = result.detail.actions.filter((action) => action.type === 'create_mirror');
-  assert.deepEqual(creates.map((action) => action.vikunja_task_id).sort(), [501, 502]);
+  assert.deepEqual(creates.map((action) => action.vikunja_task_id).sort(), [501, 502, 504]);
+  // Regla GTD de la app: inbox con fecha nace ya como next.
+  assert.equal(creates.find((action) => action.vikunja_task_id === 504).status, 'next');
+  assert.equal(creates.find((action) => action.vikunja_task_id === 501).status, 'inbox');
   // La hecha (503) y la de fuera del subtree (901) no aparecen.
   assert.equal(result.detail.actions.some((a) => a.vikunja_task_id === 503), false);
   assert.equal(result.detail.actions.some((a) => a.vikunja_task_id === 901), false);
@@ -181,10 +185,12 @@ test('cambio de status GTD en Mindwtr → add/remove de labels GTD en Vikunja', 
 
   assert.equal(result.status, 'ok');
   const removed = world.vikunja.calls.removeLabel.map((call) => call.labelId);
-  assert.deepEqual(removed, [9]); // GTD: Next
-  assert.equal(world.vikunja.calls.addLabel.length, 1);
+  assert.deepEqual(removed, [9]); // GTD: Next de la 502
   const added = world.vikunja.calls.createLabel.find((label) => label.title === 'GTD: Waiting');
   assert.ok(added, 'GTD: Waiting se crea si no existía');
+  assert.ok(world.vikunja.calls.addLabel.some((call) => call.taskId === 502 && call.labelId === added.id));
+  // La 504 (nacida next por fecha) empuja su GTD: Next de forma determinista.
+  assert.ok(world.vikunja.calls.addLabel.some((call) => call.taskId === 504));
   // Solo se tocó el subconjunto GTD: @work y deep siguen intactos.
   assert.equal(world.vikunja.calls.removeLabel.some((call) => [8, 7].includes(call.labelId)), false);
 });

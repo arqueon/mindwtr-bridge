@@ -290,18 +290,24 @@ async function runCycle({ config, pool, vikunja, webdav, dryRun = false, now = n
         if (ambiguousGtd) {
           warn(`Tarea ${vikunjaTaskId} («${task.title}») tiene varias labels GTD; se usa la de mayor precedencia.`);
         }
+        // Regla GTD de la app: un inbox con fecha ya está clarificado y Mindwtr
+        // lo promueve a next por su cuenta. Nacer ya como next evita la ola de
+        // escrituras de vuelta (labels GTD: Next) tras la promoción local.
+        const birthStatus = (vikunjaSnap.gtd_status && vikunjaSnap.gtd_status !== 'inbox')
+          ? vikunjaSnap.gtd_status
+          : (vikunjaSnap.due_date ? 'next' : 'inbox');
         run.detail.actions.push({
           type: 'create_mirror',
           vikunja_task_id: vikunjaTaskId,
           title: vikunjaSnap.title,
-          status: vikunjaSnap.gtd_status ?? 'inbox',
+          status: birthStatus,
           project: vikunjaSnap.project,
           area: vikunjaSnap.area,
         });
         if (!dryRun) {
           const mirror = model.createMirrorTask(data, {
             title: vikunjaSnap.title,
-            status: vikunjaSnap.gtd_status ?? 'inbox',
+            status: birthStatus,
             priority: vikunjaSnap.priority,
             dueDate: vikunjaSnap.due_date,
             startTime: vikunjaSnap.start_time,
