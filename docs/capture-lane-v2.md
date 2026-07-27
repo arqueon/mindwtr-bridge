@@ -1,10 +1,11 @@
-# Carril de captura (v2) — tareas y proyectos nacidos en Mindwtr
+# Carril de captura (v2) — tareas y proyectos nacidos en Mindwtr O en Vikunja
 
 Diseño aprobado en concepto el 2026-07-26; pendiente de implementación.
-Objetivo: capturar en Mindwtr y que la tarea/proyecto **nazca en Anytype**,
-entrando después al circuito normal (atvk → Vikunja → bridge). Vikunja se
+Objetivo: capturar en Mindwtr **o en Vikunja** y que la tarea/proyecto
+**nazca en Anytype**, entrando después al circuito normal. Vikunja se
 mantiene como hub; la API de Anytype se usa **solo para crear**, no como
-borde continuo de sincronización (evita el triángulo A↔V↔M).
+borde continuo de sincronización (evita el triángulo A↔V↔M). Tras la v2,
+Anytype deja de ser la única sala de partos: los tres extremos pueden crear.
 
 ## Semántica de intención (cómo se opta al circuito)
 
@@ -75,6 +76,39 @@ Latencia total ~6–9 min; el objeto existe en Anytype desde el primer ciclo.
      sembrados desde el snapshot Vikunja; marcar `adopted`.
    - Anti-doble-espejo: el paso «create_mirror» debe ignorar tareas
      Vikunja cuyo anytype_task_id tenga capture pending/adopted reciente.
+
+## Carril Vikunja (simétrico, más simple que el de Mindwtr)
+
+- **Intención**: una tarea creada en Vikunja dentro del subtree ANYTYPE
+  (proyecto mapeado o «00 · Sin proyecto» de un Space) es del circuito por
+  colocación — igual que en Mindwtr. Un proyecto creado bajo un contenedor
+  de Space, ídem.
+- **Mecanismo — adopción vía marcador de procedencia de atvk**: el carril
+  crea el objeto en Anytype (Space/proyecto deducidos de la posición) y
+  añade a la descripción de la tarea Vikunja EXISTENTE el marcador
+  `<!-- atvk:v1:sha256(spaceId␀objectId)[..40] -->` (formato de
+  `canonical.js:provenanceMarker` de atvk). El bootstrap de atvk busca ese
+  marcador en las tareas de Vikunja (es su mecanismo de recuperación
+  idempotente) y **adopta la tarea existente en su task_map en vez de crear
+  un duplicado**. Proyectos: igual con `atvk-project:v1:…` y
+  `ensureDestinationProject`. Cero cambios en atvk.
+  - VERIFICAR en implementación (bootstrap-service.js): que la ruta de
+    recuperación por marcador realmente adopte tareas no nacidas del propio
+    atvk, y qué campos reescribe al adoptar (description es anytype_wins:
+    atvk la regenerará desde el cuerpo del objeto + bloque de contexto —
+    aceptable; el capturador puede copiar el texto original al objeto
+    Anytype ANTES de marcar, para no perderlo).
+- **Lado Mindwtr, gratis**: el bridge ya espeja las tareas Vikunja-nacidas
+  del subtree (create_mirror por posición, sin preguntar a atvk), y su
+  mapeo es por `vikunja_task_id`, que no cambia con la adopción → no
+  necesita lógica nueva; la tarea pasa de ciudadana ⅔ a circuito completo
+  retroactivamente.
+- `capture_map` gana columna `origin IN ('mindwtr','vikunja')`; para el
+  origen vikunja, `mindwtr_task_id` es NULL hasta que el bridge espeja.
+- Detección: tarea pendiente del subtree cuyo `vikunja_task_id` no está en
+  el `task_map` de atvk (lectura-solo ya requerida) ni en `capture_map`.
+  Dar un ciclo de gracia (~5 min de antigüedad) para no capturar tareas que
+  atvk esté a punto de crear él mismo en su bootstrap.
 
 ## Decisiones y límites
 
