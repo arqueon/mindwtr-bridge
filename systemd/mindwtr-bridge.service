@@ -1,13 +1,11 @@
 [Unit]
 Description=mindwtr-bridge: reconciliación Vikunja[ANYTYPE] ⟷ Mindwtr
-After=network-online.target
+After=network-online.target docker.service
 Wants=network-online.target
+Requires=docker.service
 
 [Service]
 Type=oneshot
-User=sinope
 WorkingDirectory=/home/sinope/mindwtr-bridge
-ExecStart=/usr/bin/node src/cli.js reconcile
-# HOME explícito: las unidades sin él rompen herramientas que lo asumen.
-Environment=HOME=/home/sinope
-TimeoutStartSec=120
+ExecStart=/usr/bin/docker compose run --rm bridge reconcile
+TimeoutStartSec=150

@@ -1,0 +1,22 @@
+# El ciclo corre como one-shot: `docker compose run --rm bridge <comando>`.
+# Dos redes como el worker de atvk: backend (interna) para postgres y app
+# para salir a Vikunja/Nextcloud.
+services:
+  bridge:
+    image: node:24-alpine
+    user: "1000:1000"
+    working_dir: /app
+    volumes:
+      - .:/app
+    networks:
+      - app
+      - backend
+    entrypoint: ["node", "src/cli.js"]
+
+networks:
+  app:
+    external: true
+    name: reminders_app
+  backend:
+    external: true
+    name: reminders_backend
