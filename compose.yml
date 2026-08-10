@@ -8,6 +8,9 @@ services:
     working_dir: /app
     volumes:
       - .:/app
+      - ${ATVK_MAINTENANCE_DIR:-/home/sinope/maintenance}:/run/atvk-maintenance:ro
+    environment:
+      ATVK_MAINTENANCE_FILE: /run/atvk-maintenance/atvk-mindwtr.lock
     networks:
       - app
       - backend

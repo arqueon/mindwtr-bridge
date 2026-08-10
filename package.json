@@ -1,6 +1,6 @@
 {
   "name": "mindwtr-bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Puente Vikunja[ANYTYPE] ⟷ Mindwtr (data.json vía WebDAV) para accionar tareas de Anytype en GTD",
   "private": true,
   "license": "MIT",

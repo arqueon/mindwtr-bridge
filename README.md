@@ -48,6 +48,10 @@ bridge los preserva siempre y no los sincroniza.
 - Tareas borradas/archivadas localmente en Mindwtr (tombstone `deletedAt`) →
   estado `dismissed`: no se recrean nunca y no tocan Vikunja.
 - Un solo escritor: advisory lock de PostgreSQL por ciclo.
+- El ciclo real consulta el candado compartido
+  /run/atvk-maintenance/atvk-mindwtr.lock; durante mantenimiento devuelve
+  skipped_maintenance sin leer ni escribir WebDAV o Vikunja. El dry-run
+  permanece disponible para verificar.
 
 ## Operación
 
