@@ -25,8 +25,11 @@ Además, bidireccionales: `done` (recurrentes de Vikunja: solo V→M),
 `due_date` y `startTime` (granularidad de día en `timezone`),
 `isFocusedToday ↔ is_favorite` (solo Vikunja). Solo V→M con reversión de
 ediciones locales: `title`, proyecto y área. **Nunca** se copia la
-description (contiene invitaciones de Space) ni se crean/borran tareas
-ANYTYPE desde Mindwtr.
+description original: el bridge elimina invitaciones/capabilities, URI de
+Anytype y marcadores técnicos, convierte el contenido útil a texto legible y
+lo copia solo V→M. Si la descripción ya fue editada en Mindwtr, la conserva;
+solo actualiza textos vacíos o todavía administrados por el bridge. Tampoco se
+crean/borran tareas ANYTYPE desde Mindwtr.
 
 Organización en Mindwtr: **Área por Space** (`Our Space 🔥`, `Academia`,
 `UDGPlus`) y **proyecto Mindwtr por proyecto Anytype**; tareas de
@@ -84,7 +87,7 @@ el `device_uuid`.
 ## Límites conocidos (v1)
 
 - No se propagan borrados (desapariciones → `retired`/`dismissed`).
-- La description no viaja a Mindwtr (decisión de seguridad).
+- La description viaja saneada y solo V→M; las notas locales tienen prioridad.
 - Un conflicto simultáneo campo-a-campo se resuelve a favor de Vikunja.
 - El estado GTD vive como labels en Vikunja: si alguien pone dos labels
   `GTD: *` a mano, gana la más accionable (Next > Waiting > Someday >

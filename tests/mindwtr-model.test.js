@@ -47,12 +47,14 @@ test('applyTaskPatch aplica cambios, sube rev una vez y respeta no-cambios', () 
   assert.equal(task.rev, 1);
 
   const changed = model.applyTaskPatch(task, {
+    description: 'Contenido útil',
     gtd_status: 'next',
     priority: 'high',
     due_date: '2026-07-30',
   }, DEVICE, NOW);
   assert.equal(changed, true);
   assert.equal(task.status, 'next');
+  assert.equal(task.description, 'Contenido útil');
   assert.equal(task.priority, 'high');
   assert.equal(task.dueDate, '2026-07-30');
   assert.equal(task.rev, 2);
@@ -91,6 +93,7 @@ test('taskSnapshot produce los campos lógicos del contrato', () => {
   const personal = data.tasks.find((task) => task.title === 'Tarea personal');
   const snapshot = model.taskSnapshot(personal, helpers);
   assert.equal(snapshot.gtd_status, 'next');
+  assert.equal(snapshot.description, 'Tarea personal que el bridge jamás debe tocar.');
   assert.equal(snapshot.done, false);
   assert.equal(snapshot.due_date, '2026-07-27');
   assert.equal(snapshot.start_time, '2026-07-25');
@@ -103,9 +106,10 @@ test('createMirrorTask con proyecto no lleva areaId', () => {
   const area = model.ensureArea(data, { name: 'Space X' }, DEVICE, NOW);
   const project = model.ensureProject(data, { title: 'Proyecto X', areaId: area.id }, DEVICE, NOW);
   const withProject = model.createMirrorTask(data, {
-    title: 'A', status: 'next', projectId: project.id, areaId: area.id,
+    title: 'A', description: 'Descripción segura', status: 'next', projectId: project.id, areaId: area.id,
   }, DEVICE, NOW);
   assert.equal(withProject.projectId, project.id);
+  assert.equal(withProject.description, 'Descripción segura');
   assert.equal(withProject.areaId, undefined);
 
   const withoutProject = model.createMirrorTask(data, {
