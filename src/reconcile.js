@@ -12,6 +12,7 @@ const model = require('./mindwtr-model');
 const { runCaptureLane } = require('./capture');
 const { withAdvisoryLock } = require('./lib/database');
 const { sha256 } = require('./lib/canonical');
+const { safeDescriptionFromVikunja } = require('./safe-description');
 
 const LOCK_KEY = 'mindwtr-bridge';
 // Para limpiar una fecha, la API de Vikunja espera el cero de Go, no null.
@@ -46,6 +47,7 @@ function vikunjaLogicalSnapshot(task, { timezone, destination }) {
   return {
     snapshot: {
       title: String(task.title ?? '').normalize('NFC').trim(),
+      description: safeDescriptionFromVikunja(task.description),
       done: Boolean(task.done),
       gtd_status: task.done ? null : gtdStatus.status,
       priority: gtd.vikunjaPriorityToMindwtr(task.priority),
@@ -411,6 +413,7 @@ async function runCycle({ config, pool, vikunja, webdav, atvkPool = null, anytyp
         if (!dryRun) {
           const mirror = model.createMirrorTask(data, {
             title: vikunjaSnap.title,
+            description: vikunjaSnap.description,
             status: birthStatus,
             priority: vikunjaSnap.priority,
             dueDate: vikunjaSnap.due_date,
@@ -496,6 +499,57 @@ async function runCycle({ config, pool, vikunja, webdav, atvkPool = null, anytyp
       const patch = {};
       const vikunjaChanges = {};
       const taskLabelOps = { taskId: vikunjaTaskId, add: [], remove: [] };
+
+      // Description es V→M, pero no se trata como los campos autoritativos:
+      // una nota local de Mindwtr tiene prioridad y jamás se sobrescribe. El
+      // último valor saneado de Vikunja funciona como checkpoint para saber
+      // si el texto local todavía es administrado por el bridge.
+      const upstreamDescription = vikunjaSnap.description ?? null;
+      const localDescription = mindwtrSnap.description ?? null;
+      const priorDescription = fieldState.get(`${vikunjaTaskId}:description`);
+      const priorUpstream = priorDescription?.last_common_value ?? null;
+      const localIsEmpty = !localDescription;
+      const localMatchesUpstream = equalValue(localDescription, upstreamDescription);
+      const localIsBridgeManaged = Boolean(priorDescription)
+        && priorDescription.last_origin !== 'mindwtr_local_preserved'
+        && equalValue(localDescription, priorUpstream);
+      const shouldWriteDescription = Boolean(upstreamDescription)
+        && (localIsEmpty || localIsBridgeManaged)
+        && !equalValue(localDescription, upstreamDescription);
+
+      if (shouldWriteDescription) {
+        patch.description = upstreamDescription;
+        commonRecords.push({
+          taskId: vikunjaTaskId,
+          field: 'description',
+          common: upstreamDescription,
+          origin: 'vikunja_sanitized',
+          persist: 'on_put',
+        });
+        run.detail.actions.push({
+          type: 'update_mindwtr',
+          vikunja_task_id: vikunjaTaskId,
+          field: 'description',
+          content_changed: true,
+        });
+      } else {
+        commonRecords.push({
+          taskId: vikunjaTaskId,
+          field: 'description',
+          common: upstreamDescription,
+          origin: localDescription && !localIsBridgeManaged && !localMatchesUpstream
+            ? 'mindwtr_local_preserved'
+            : 'vikunja_sanitized',
+          persist: 'always',
+        });
+        if (localDescription && !localIsBridgeManaged && !localMatchesUpstream) {
+          run.detail.actions.push({
+            type: 'preserve_mindwtr_description',
+            vikunja_task_id: vikunjaTaskId,
+            content_changed: false,
+          });
+        }
+      }
 
       for (const [field, policy] of Object.entries(FIELD_POLICIES)) {
         if (field === 'focus' && !config.enable_focus) continue;

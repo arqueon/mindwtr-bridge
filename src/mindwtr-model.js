@@ -52,6 +52,7 @@ function isTombstoned(entity) {
 function taskSnapshot(task, { mindwtrDateOnly, normalizeContexts, normalizeTags }) {
   return {
     title: String(task?.title ?? '').normalize('NFC').trim(),
+    description: String(task?.description ?? '').normalize('NFC').trim() || null,
     done: task?.status === 'done' || task?.status === 'archived',
     gtd_status: MIRROR_STATUSES.includes(task?.status) ? task.status : null,
     priority: task?.priority ?? null,
@@ -103,6 +104,7 @@ function createMirrorTask(data, fields, deviceUuid, nowIso) {
   const task = {
     id: uuid(),
     title: fields.title,
+    ...(fields.description ? { description: fields.description } : {}),
     status: fields.status ?? 'inbox',
     ...(fields.priority ? { priority: fields.priority } : {}),
     ...(fields.dueDate ? { dueDate: fields.dueDate } : {}),
@@ -138,6 +140,7 @@ function applyTaskPatch(task, patch, deviceUuid, nowIso) {
   };
 
   if ('title' in patch) assign('title', patch.title);
+  if ('description' in patch) assign('description', patch.description);
   if ('priority' in patch) assign('priority', patch.priority);
   if ('due_date' in patch) assign('dueDate', patch.due_date);
   if ('start_time' in patch) assign('startTime', patch.start_time);

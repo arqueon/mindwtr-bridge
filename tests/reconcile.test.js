@@ -38,6 +38,7 @@ function baseTasks() {
         id: 502,
         project_id: 103,
         title: 'Tarea de proyecto',
+        description: '<p>Plan útil</p><p><strong>Origen Anytype</strong></p><p><a href="https://object.any.coop/invite/?inviteId=secreto#invite_key">Abrir</a></p><!-- atvk:v6 -->',
         done: false,
         priority: 3,
         due_date: '2026-07-28T15:00:00Z',
@@ -128,6 +129,7 @@ test('ciclo real: crea espejos, área y proyecto; preserva lo personal', async (
   const mapping502 = world.db.state.task_map.find((row) => row.vikunja_task_id === 502);
   const mirror502 = written.tasks.find((task) => task.id === mapping502.mindwtr_task_id);
   assert.equal(mirror502.projectId, mirrorProject.id);
+  assert.equal(mirror502.description, 'Plan útil');
   assert.equal(mirror502.status, 'next');
   assert.equal(mirror502.priority, 'high');
   assert.equal(mirror502.dueDate, '2026-07-28');
@@ -236,6 +238,116 @@ test('el bridge jamás escribe title/description/project_id hacia Vikunja', asyn
     written.tasks.find((task) => task.id === mapping.mindwtr_task_id).title,
     'Tarea de proyecto',
   );
+});
+
+test('description saneada se actualiza mientras siga administrada por el bridge', async () => {
+  const { world, body } = await convergedWorld();
+  const task = baseTasks()[103][0];
+  task.description = '<p>Plan actualizado</p><p><strong>Origen Anytype</strong></p><p>anytype://secreto</p>';
+  const updatedWorld = makeWorld({
+    data: body,
+    tasks: { ...baseTasks(), 103: [task] },
+    seed: {
+      task_map: world.db.state.task_map,
+      task_field_state: world.db.state.task_field_state,
+      area_map: world.db.state.area_map,
+      project_map: world.db.state.project_map,
+    },
+  });
+  const result = await cycle(updatedWorld);
+  const written = model.parseData(updatedWorld.webdav.record.puts.at(-1).body);
+  const mapping = updatedWorld.db.state.task_map.find((row) => row.vikunja_task_id === 502);
+  const mirror = written.tasks.find((item) => item.id === mapping.mindwtr_task_id);
+
+  assert.equal(mirror.description, 'Plan actualizado');
+  const action = result.detail.actions.find((item) => item.field === 'description');
+  assert.deepEqual(action, {
+    type: 'update_mindwtr',
+    vikunja_task_id: 502,
+    field: 'description',
+    content_changed: true,
+  });
+});
+
+test('description local de Mindwtr se preserva aunque cambie Vikunja', async () => {
+  const tasks = baseTasks();
+  tasks[103][0].description = '<p>Plan actualizado</p><p><strong>Origen Anytype</strong></p>';
+  const { world, body } = await convergedWorld(({ data, mirror }) => {
+    mirror.description = 'Mi nota local privada';
+    mirror.rev += 1;
+    return model.serializeData(data);
+  });
+  const preservedWorld = makeWorld({
+    data: body,
+    tasks,
+    seed: {
+      task_map: world.db.state.task_map,
+      task_field_state: world.db.state.task_field_state,
+      area_map: world.db.state.area_map,
+      project_map: world.db.state.project_map,
+    },
+  });
+  const result = await cycle(preservedWorld);
+  const written = preservedWorld.webdav.record.puts.length
+    ? model.parseData(preservedWorld.webdav.record.puts.at(-1).body)
+    : model.parseData((await preservedWorld.webdav.get()).body);
+  const mapping = preservedWorld.db.state.task_map.find((row) => row.vikunja_task_id === 502);
+  assert.equal(written.tasks.find((item) => item.id === mapping.mindwtr_task_id).description, 'Mi nota local privada');
+  assert.ok(result.detail.actions.some(
+    (item) => item.type === 'preserve_mindwtr_description' && item.vikunja_task_id === 502,
+  ));
+
+  // El checkpoint conserva el origen local también en ciclos posteriores.
+  tasks[103][0].description = '<p>Plan tercero</p><p><strong>Origen Anytype</strong></p>';
+  const nextWorld = makeWorld({
+    data: model.serializeData(written),
+    tasks,
+    seed: {
+      task_map: preservedWorld.db.state.task_map,
+      task_field_state: preservedWorld.db.state.task_field_state,
+      area_map: preservedWorld.db.state.area_map,
+      project_map: preservedWorld.db.state.project_map,
+    },
+  });
+  await cycle(nextWorld);
+  const nextData = nextWorld.webdav.record.puts.length
+    ? model.parseData(nextWorld.webdav.record.puts.at(-1).body)
+    : model.parseData((await nextWorld.webdav.get()).body);
+  assert.equal(nextData.tasks.find((item) => item.id === mapping.mindwtr_task_id).description, 'Mi nota local privada');
+});
+
+test('description vacía de un espejo existente se rellena de forma segura', async () => {
+  const { world } = await convergedWorld(({ data, mirror }) => {
+    delete mirror.description;
+    mirror.rev += 1;
+    return model.serializeData(data);
+  });
+  const result = await cycle(world);
+  const written = model.parseData(world.webdav.record.puts.at(-1).body);
+  const mapping = world.db.state.task_map.find((row) => row.vikunja_task_id === 502);
+  assert.equal(written.tasks.find((item) => item.id === mapping.mindwtr_task_id).description, 'Plan útil');
+  assert.ok(result.detail.actions.some(
+    (item) => item.type === 'update_mindwtr' && item.field === 'description',
+  ));
+});
+
+test('description ya convergida sin checkpoint se adopta como gestionada', async () => {
+  const { world, body } = await convergedWorld();
+  const recovered = makeWorld({
+    data: body,
+    seed: {
+      task_map: world.db.state.task_map,
+      task_field_state: world.db.state.task_field_state.filter(row => row.field_name !== 'description'),
+      area_map: world.db.state.area_map,
+      project_map: world.db.state.project_map,
+    },
+  });
+  await cycle(recovered);
+  const checkpoint = recovered.db.state.task_field_state.find(
+    row => row.vikunja_task_id === 502 && row.field_name === 'description',
+  );
+  assert.equal(checkpoint.last_origin, 'vikunja_sanitized');
+  assert.equal(checkpoint.last_common_value, 'Plan útil');
 });
 
 test('412 en el PUT aborta el lado Mindwtr sin persistir mapeos nuevos', async () => {

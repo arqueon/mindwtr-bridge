@@ -45,12 +45,14 @@ CREATE TABLE IF NOT EXISTS task_map (
 CREATE TABLE IF NOT EXISTS task_field_state (
     vikunja_task_id bigint NOT NULL REFERENCES task_map ON DELETE CASCADE,
     field_name text NOT NULL CHECK (field_name IN
-        ('title', 'done', 'gtd_status', 'priority', 'due_date', 'start_time',
+        ('title', 'description', 'done', 'gtd_status', 'priority', 'due_date', 'start_time',
          'contexts', 'tags', 'focus', 'project', 'area')),
     last_vikunja_value jsonb,
     last_mindwtr_value jsonb,
     last_common_value jsonb,
-    last_origin text CHECK (last_origin IN ('vikunja', 'mindwtr', 'bootstrap', 'reconcile')),
+    last_origin text CHECK (last_origin IN
+        ('vikunja', 'mindwtr', 'bootstrap', 'reconcile',
+         'vikunja_sanitized', 'mindwtr_local_preserved')),
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (vikunja_task_id, field_name)
 );
