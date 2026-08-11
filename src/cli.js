@@ -13,6 +13,24 @@ const { runCycle, findAnytypeRoot, buildSubtree } = require('./reconcile');
 const gtd = require('./gtd-mapping');
 const model = require('./mindwtr-model');
 
+function maintenanceFilePath(environment = process.env) {
+  return environment.ATVK_MAINTENANCE_FILE || '/run/atvk-maintenance/atvk-mindwtr.lock';
+}
+
+function maintenanceStatus(environment = process.env) {
+  const file = maintenanceFilePath(environment);
+  try {
+    const reason = fs.readFileSync(file, 'utf8').trim();
+    return {
+      active: true,
+      reason: reason || 'mantenimiento-controlado',
+    };
+  } catch (error) {
+    if (error.code === 'ENOENT') return { active: false, reason: null };
+    throw error;
+  }
+}
+
 function loadConfig() {
   const configPath = process.env.BRIDGE_CONFIG
     || path.join(__dirname, '..', 'config', 'bridge.json');
@@ -213,6 +231,19 @@ async function commandVerify() {
 
 async function main() {
   const [command, ...args] = process.argv.slice(2);
+  if (command === 'reconcile') {
+    const maintenance = maintenanceStatus();
+    if (maintenance.active) {
+      process.stdout.write(JSON.stringify({
+        ok: true,
+        status: 'skipped_maintenance',
+        vikunja_writes: 0,
+        mindwtr_mutations: 0,
+        reason: maintenance.reason,
+      }, null, 2) + '\n');
+      return undefined;
+    }
+  }
   switch (command) {
     case 'reconcile':
       return commandReconcile({ dryRun: false });
@@ -231,7 +262,14 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error.stack ?? error.message}\n`);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    process.stderr.write(`${error.stack ?? error.message}\n`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  maintenanceFilePath,
+  maintenanceStatus,
+};
