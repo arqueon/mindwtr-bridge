@@ -331,6 +331,25 @@ test('description vacía de un espejo existente se rellena de forma segura', asy
   ));
 });
 
+test('description ya convergida sin checkpoint se adopta como gestionada', async () => {
+  const { world, body } = await convergedWorld();
+  const recovered = makeWorld({
+    data: body,
+    seed: {
+      task_map: world.db.state.task_map,
+      task_field_state: world.db.state.task_field_state.filter(row => row.field_name !== 'description'),
+      area_map: world.db.state.area_map,
+      project_map: world.db.state.project_map,
+    },
+  });
+  await cycle(recovered);
+  const checkpoint = recovered.db.state.task_field_state.find(
+    row => row.vikunja_task_id === 502 && row.field_name === 'description',
+  );
+  assert.equal(checkpoint.last_origin, 'vikunja_sanitized');
+  assert.equal(checkpoint.last_common_value, 'Plan útil');
+});
+
 test('412 en el PUT aborta el lado Mindwtr sin persistir mapeos nuevos', async () => {
   const world = makeWorld({ conflictOnPut: true });
   const result = await cycle(world);

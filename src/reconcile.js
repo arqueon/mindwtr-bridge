@@ -509,6 +509,7 @@ async function runCycle({ config, pool, vikunja, webdav, atvkPool = null, anytyp
       const priorDescription = fieldState.get(`${vikunjaTaskId}:description`);
       const priorUpstream = priorDescription?.last_common_value ?? null;
       const localIsEmpty = !localDescription;
+      const localMatchesUpstream = equalValue(localDescription, upstreamDescription);
       const localIsBridgeManaged = Boolean(priorDescription)
         && priorDescription.last_origin !== 'mindwtr_local_preserved'
         && equalValue(localDescription, priorUpstream);
@@ -536,13 +537,12 @@ async function runCycle({ config, pool, vikunja, webdav, atvkPool = null, anytyp
           taskId: vikunjaTaskId,
           field: 'description',
           common: upstreamDescription,
-          origin: localDescription && !localIsBridgeManaged
+          origin: localDescription && !localIsBridgeManaged && !localMatchesUpstream
             ? 'mindwtr_local_preserved'
             : 'vikunja_sanitized',
           persist: 'always',
         });
-        if (localDescription && !localIsBridgeManaged
-            && !equalValue(localDescription, upstreamDescription)) {
+        if (localDescription && !localIsBridgeManaged && !localMatchesUpstream) {
           run.detail.actions.push({
             type: 'preserve_mindwtr_description',
             vikunja_task_id: vikunjaTaskId,
