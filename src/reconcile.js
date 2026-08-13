@@ -10,6 +10,7 @@ const { decideFieldSync, equalValue } = require('./lib/field-sync');
 const gtd = require('./gtd-mapping');
 const model = require('./mindwtr-model');
 const { runCaptureLane } = require('./capture');
+const { rebindTaskIdentities } = require('./identity-rebind');
 const { withAdvisoryLock } = require('./lib/database');
 const { sha256 } = require('./lib/canonical');
 const { safeDescriptionFromVikunja } = require('./safe-description');
@@ -106,7 +107,7 @@ async function ensureGtdLabels(vikunja, log) {
 
 // --- Ciclo ----------------------------------------------------------------
 
-async function runCycle({ config, pool, vikunja, webdav, atvkPool = null, anytype = null, dryRun = false, now = new Date(), log = () => {} }) {
+async function runCycle({ config, pool, vikunja, webdav, dryRun = false, now = new Date(), log = () => {} }) {
   return withAdvisoryLock(pool, LOCK_KEY, async (db) => {
     const nowIso = now.toISOString();
     const run = {
@@ -142,7 +143,7 @@ async function runCycle({ config, pool, vikunja, webdav, atvkPool = null, anytyp
 
     const areaByVikunja = new Map(areaRows.map((row) => [Number(row.vikunja_project_id), row]));
     const projectByVikunja = new Map(projectRows.map((row) => [Number(row.vikunja_project_id), row]));
-    const mappingByVikunja = new Map(taskRows.map((row) => [Number(row.vikunja_task_id), row]));
+    let mappingByVikunja = new Map(taskRows.map((row) => [Number(row.vikunja_task_id), row]));
     const fieldState = new Map();
     for (const row of fieldRows) {
       fieldState.set(`${row.vikunja_task_id}:${row.field_name}`, row);
@@ -203,7 +204,7 @@ async function runCycle({ config, pool, vikunja, webdav, atvkPool = null, anytyp
       return area.id;
     };
 
-    // Rellenado tras la enumeración por el carril de captura (v2).
+    // Rellenado tras la enumeración por el carril de captura (v3).
     let captureResult = { adoptTask: new Map(), adoptProject: new Map(), created: 0 };
 
     const destinationFor = (vikunjaProjectId) => {
@@ -220,9 +221,8 @@ async function runCycle({ config, pool, vikunja, webdav, atvkPool = null, anytyp
         }
         return { projectId: existing.mindwtr_project_id, areaId: null };
       }
-      // Adopción de captura mindwtr: el proyecto Vikunja recién materializado
-      // por atvk corresponde a un proyecto que YA existe en Mindwtr — se
-      // enlaza en vez de crear un espejo duplicado.
+      // Adopción de captura Mindwtr: el proyecto recién materializado en
+      // Vikunja corresponde a uno que YA existe en Mindwtr.
       const adoptProject = captureResult.adoptProject.get(entry.project.id);
       if (adoptProject && !dryRun) {
         const row = {
@@ -274,17 +274,39 @@ async function runCycle({ config, pool, vikunja, webdav, atvkPool = null, anytyp
       }
     }
 
+    const identityRebind = await rebindTaskIdentities({
+      db,
+      taskRows,
+      vikunjaTasks,
+      dryRun,
+      actions: run.detail.actions,
+      warn,
+    });
+    mappingByVikunja = identityRebind.mappingByVikunja;
+    run.detail.identity_rebind = {
+      seeded: identityRebind.seeded,
+      rebound: identityRebind.rebound,
+      conflicts: identityRebind.conflicts,
+    };
+
+    // Los ids re-enlazados deben apuntar al mismo checkpoint de campos.
+    if (identityRebind.rebound > 0 && !dryRun) {
+      const refreshed = (await db.query('SELECT * FROM task_field_state')).rows;
+      fieldState.clear();
+      for (const row of refreshed) {
+        fieldState.set(`${row.vikunja_task_id}:${row.field_name}`, row);
+      }
+    }
+
     const mirrorById = new Map(data.tasks.map((task) => [task.id, task]));
     const pilotFilter = new Set((config.pilot_task_ids ?? []).map(Number));
 
-    // Carril de captura v2: da a luz en Anytype lo nacido en Mindwtr/Vikunja
-    // y prepara las adopciones que la fase de plan consume.
+    // Carril de captura v3: da de alta en Vikunja lo nacido en Mindwtr. ATVK
+    // se ocupa después de Anytype.
     try {
       captureResult = await runCaptureLane({
         config,
         db,
-        atvkDb: atvkPool,
-        anytype,
         vikunja,
         data,
         bridge: { mappingByVikunja, areaByVikunja, projectByVikunja },
@@ -353,8 +375,8 @@ async function runCycle({ config, pool, vikunja, webdav, atvkPool = null, anytyp
 
       // Sin mapeo → adopción de captura o candidata a espejo nuevo.
       if (!mapping) {
-        // Adopción (captura mindwtr): la tarea Vikunja recién creada por atvk
-        // corresponde a un espejo que YA existe — se enlaza sin duplicar.
+        // Adopción: la tarea recién creada en Vikunja corresponde al espejo
+        // Mindwtr original y se enlaza sin duplicar.
         const adopt = captureResult.adoptTask.get(vikunjaTaskId);
         if (adopt) {
           const adoptDestination = destinationFor(task.project_id);

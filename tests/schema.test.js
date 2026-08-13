@@ -15,3 +15,18 @@ test('el esquema inicial y la migración admiten description y sus orígenes', (
     assert.match(sql, /'mindwtr_local_preserved'/);
   }
 });
+
+test('la identidad puede cambiar de id Vikunja sin perder checkpoints', () => {
+  const sql = fs.readFileSync(path.join(root, 'db/migrations/004_identity_rebind.sql'), 'utf8');
+  assert.match(sql, /provenance_marker/);
+  assert.match(sql, /ON UPDATE CASCADE/);
+});
+
+test('el carril v3 ya no necesita columnas Anytype para nuevas capturas', () => {
+  const sql = fs.readFileSync(path.join(root, 'db/migrations/005_vikunja_only_capture.sql'), 'utf8');
+  assert.match(sql, /anytype_space_id DROP NOT NULL/);
+  const config = JSON.parse(fs.readFileSync(path.join(root, 'config/bridge.json'), 'utf8'));
+  assert.equal(Object.hasOwn(config, 'anytype_api_url'), false);
+  assert.equal(Object.hasOwn(config, 'atvk_db_name'), false);
+  assert.equal(fs.existsSync(path.join(root, 'src/anytype-client.js')), false);
+});

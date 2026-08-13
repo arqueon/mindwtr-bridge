@@ -3,8 +3,9 @@
 Puente entre **Vikunja** (jerarquía `ANYTYPE`, alimentada por
 [vikunja-anytype-sync](../vikunja-anytype-sync)) y **Mindwtr** (app GTD que
 sincroniza su estado como un único `data.json` vía WebDAV en Nextcloud).
-Cierra el circuito **Anytype ⟷ Vikunja ⟷ Mindwtr**: las tareas de Anytype se
-accionan en Mindwtr y los cambios regresan hasta Anytype.
+Cierra el circuito **Anytype ⟷ Vikunja ⟷ Mindwtr**. El bridge sólo habla con
+Vikunja: las altas y cambios de Mindwtr llegan primero allí y ATVK es el único
+componente que escribe después en Anytype.
 
 ```
 Anytype ⟷ (atvk, cada 3 min) ⟷ Vikunja[ANYTYPE] ⟷ (este bridge, cada 3 min) ⟷ data.json
@@ -28,8 +29,9 @@ ediciones locales: `title`, proyecto y área. **Nunca** se copia la
 description original: el bridge elimina invitaciones/capabilities, URI de
 Anytype y marcadores técnicos, convierte el contenido útil a texto legible y
 lo copia solo V→M. Si la descripción ya fue editada en Mindwtr, la conserva;
-solo actualiza textos vacíos o todavía administrados por el bridge. Tampoco se
-crean/borran tareas ANYTYPE desde Mindwtr.
+solo actualiza textos vacíos o todavía administrados por el bridge. Las tareas
+y proyectos nuevos de un área administrada sí se crean desde Mindwtr, pero
+exclusivamente en Vikunja; nunca mediante la API de Anytype.
 
 Organización en Mindwtr: **Área por Space** (`Our Space 🔥`, `Academia`,
 `UDGPlus`) y **proyecto Mindwtr por proyecto Anytype**; tareas de
@@ -41,6 +43,8 @@ bridge los preserva siempre y no los sincroniza.
 
 - **Identidad**: uuid del espejo ↔ id de tarea Vikunja en `task_map`
   (PostgreSQL `mindwtr_sync`); jamás por título.
+- El marcador ATVK se guarda junto al mapping. Si un borrado de proyecto
+  sustituye los IDs de sus tareas Vikunja, se conserva el mismo UUID Mindwtr.
 - **Three-way merge por campo** (`task_field_state.last_common_value`,
   política `vikunja_wins` en choque simultáneo).
 - **WebDAV atómico**: GET con ETag → PUT `If-Match`; un 412 (la app escribió
@@ -73,6 +77,8 @@ min (`scripts/install-systemd.sh`). Secretos en `secrets/` modo 0600:
 `postgres-url`. `scripts/init-db.sh` crea la BD, aplica migraciones y genera
 el `device_uuid`.
 
+No se necesita `anytype-api-key` ni acceso a `anytype_sync`.
+
 ## Puesta en marcha (resumen de fases)
 
 1. **Dry-run** unos días: `dry-run` debe listar solo `create_mirror` de
@@ -84,9 +90,10 @@ el `device_uuid`.
    ~81 espejos en un solo PUT.
 4. Retirar el spike anterior (`vikunja-mindwtr-sync`) y su cron.
 
-## Límites conocidos (v1)
+## Límites conocidos
 
-- No se propagan borrados (desapariciones → `retired`/`dismissed`).
+- El bridge no borra objetos remotos por un tombstone Mindwtr; los marca
+  `dismissed`. El borrado de Projects Vikunja→Anytype pertenece a ATVK.
 - La description viaja saneada y solo V→M; las notas locales tienen prioridad.
 - Un conflicto simultáneo campo-a-campo se resuelve a favor de Vikunja.
 - El estado GTD vive como labels en Vikunja: si alguien pone dos labels

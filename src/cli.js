@@ -6,7 +6,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createPool } = require('./lib/database');
-const { AnytypeClient } = require('./anytype-client');
 const { VikunjaClient } = require('./vikunja-client');
 const { WebdavClient } = require('./webdav-client');
 const { runCycle, findAnytypeRoot, buildSubtree } = require('./reconcile');
@@ -40,14 +39,6 @@ function loadConfig() {
     : path.join(path.dirname(configPath), '..', config.secrets_dir ?? 'secrets');
 
   const readSecret = (name) => fs.readFileSync(path.join(secretsDir, name), 'utf8').trim();
-  const readOptionalSecret = (name) => {
-    try {
-      return readSecret(name);
-    } catch {
-      return null;
-    }
-  };
-
   const [webdavUser, ...webdavPassParts] = readSecret('webdav-credentials').split(':');
   return {
     config,
@@ -55,33 +46,16 @@ function loadConfig() {
     webdavUser,
     webdavPass: webdavPassParts.join(':'),
     postgresUrl: readSecret('postgres-url'),
-    anytypeApiKey: readOptionalSecret('anytype-api-key'),
   };
 }
 
 function buildContext() {
-  const { config, vikunjaToken, webdavUser, webdavPass, postgresUrl, anytypeApiKey } = loadConfig();
+  const { config, vikunjaToken, webdavUser, webdavPass, postgresUrl } = loadConfig();
   const pool = createPool({ connectionString: postgresUrl });
   const vikunja = new VikunjaClient({ baseUrl: config.vikunja_base_url, token: vikunjaToken });
   const webdav = new WebdavClient({ url: config.webdav_url, username: webdavUser, password: webdavPass });
 
-  // Carril de captura: requiere la API de Anytype y lectura-solo de la BD de
-  // atvk. Si falta el secreto, el bridge opera sin captura (aviso, no error).
-  let anytype = null;
-  let atvkPool = null;
-  if (config.enable_capture && anytypeApiKey) {
-    anytype = new AnytypeClient({
-      baseUrl: config.anytype_api_url,
-      token: anytypeApiKey,
-      version: config.anytype_api_version,
-    });
-    const atvkUrl = postgresUrl.replace(/\/[^/?]+(\?.*)?$/, `/${config.atvk_db_name ?? 'anytype_sync'}$1`);
-    atvkPool = createPool({ connectionString: atvkUrl });
-  } else if (config.enable_capture) {
-    process.stderr.write('⚠ enable_capture sin secrets/anytype-api-key: carril de captura desactivado este ciclo.\n');
-  }
-
-  return { config, pool, vikunja, webdav, anytype, atvkPool };
+  return { config, pool, vikunja, webdav };
 }
 
 function backupBody(config, body) {
@@ -97,7 +71,7 @@ function backupBody(config, body) {
 }
 
 async function commandReconcile({ dryRun }) {
-  const { config, pool, vikunja, webdav, anytype, atvkPool } = buildContext();
+  const { config, pool, vikunja, webdav } = buildContext();
   try {
     // Backup del estado leído antes de cualquier posible PUT del ciclo.
     if (!dryRun) {
@@ -109,8 +83,6 @@ async function commandReconcile({ dryRun }) {
       pool,
       vikunja,
       webdav,
-      anytype,
-      atvkPool,
       dryRun,
       log: (message) => process.stderr.write(`${message}\n`),
     });
@@ -118,7 +90,6 @@ async function commandReconcile({ dryRun }) {
     if (result.status === 'error') process.exitCode = 1;
   } finally {
     await pool.end();
-    if (atvkPool) await atvkPool.end();
   }
 }
 

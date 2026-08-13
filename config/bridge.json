@@ -7,10 +7,6 @@
   "default_due_time": "09:00",
   "enable_focus": true,
   "enable_capture": true,
-  "capture_grace_minutes": 5,
-  "anytype_api_url": "http://anytype-cli:31012/v1",
-  "anytype_api_version": "2025-11-08",
-  "atvk_db_name": "anytype_sync",
   "pilot_task_ids": [],
   "secrets_dir": "secrets",
   "backup_retention_days": 14
