@@ -8,7 +8,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { createPool } = require('./lib/database');
 const { VikunjaClient } = require('./vikunja-client');
-const { WebdavClient } = require('./webdav-client');
+const { WebdavClient, WebdavError } = require('./webdav-client');
 const { runCycle, findAnytypeRoot, buildSubtree } = require('./reconcile');
 const gtd = require('./gtd-mapping');
 const model = require('./mindwtr-model');
@@ -124,12 +124,40 @@ function rotateBackups(config, log = () => {}) {
   return borrados;
 }
 
+// Una lectura fallida de data.json no justifica tumbar la unidad: el ciclo vuelve
+// en ~3 min y el estado remoto sigue intacto. Misma regla que rotateBackups y que
+// skipped_maintenance. Solo se omite ante fallos PASAJEROS; un 401/403/404 es
+// configuracion rota o el archivo movido, y debe seguir fallando fuerte y visible.
+// (2026-08-26: 19 fallos por "GET data.json respondio HTTP 502" mientras Nextcloud
+// estaba de rodillas por el bucle OOM de eurooffice, ninguno culpa del bridge.)
+function esFalloPasajero(err) {
+  if (!err) return false;
+  if (err instanceof WebdavError) return err.status >= 500 || err.status === 429;
+  if (err.name === 'TimeoutError' || err.name === 'AbortError') return true;
+  // undici envuelve los fallos de red en un TypeError con .cause
+  return err.name === 'TypeError' && /fetch failed/i.test(err.message || '');
+}
+
 async function commandReconcile({ dryRun }) {
   const { config, pool, vikunja, webdav } = buildContext();
   try {
     // Backup del estado leído antes de cualquier posible PUT del ciclo.
     if (!dryRun) {
-      const current = await webdav.get();
+      let current;
+      try {
+        current = await webdav.get();
+      } catch (err) {
+        if (!esFalloPasajero(err)) throw err;
+        process.stderr.write(`lectura de data.json no disponible: ${err.message}\n`);
+        process.stdout.write(`${JSON.stringify({
+          ok: true,
+          status: 'skipped_transient',
+          vikunja_writes: 0,
+          mindwtr_mutations: 0,
+          reason: err.message,
+        }, null, 2)}\n`);
+        return undefined;
+      }
       writeBackup(config, current.body);
     }
     const result = await runCycle({
@@ -299,4 +327,5 @@ if (require.main === module) {
 module.exports = {
   maintenanceFilePath,
   maintenanceStatus,
+  esFalloPasajero,
 };
