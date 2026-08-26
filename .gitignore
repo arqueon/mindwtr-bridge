@@ -4,3 +4,4 @@ backups/
 data/
 .env
 *.log
+.deploy-v7/

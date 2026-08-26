@@ -5,6 +5,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { createPool } = require('./lib/database');
 const { VikunjaClient } = require('./vikunja-client');
 const { WebdavClient } = require('./webdav-client');
@@ -58,16 +59,69 @@ function buildContext() {
   return { config, pool, vikunja, webdav };
 }
 
-function backupBody(config, body) {
-  const dir = config.backups_dir || path.join(__dirname, '..', 'backups');
+function backupsDir(config) {
+  return config.backups_dir || path.join(__dirname, '..', 'backups');
+}
+
+// Solo los respaldos que genera este modulo. El 2026-08-10 un directorio ajeno
+// en backups/ (pre-safe-descriptions-...) hizo que unlinkSync lanzara EISDIR.
+function listBackups(dir) {
+  return fs.readdirSync(dir).filter((f) => /^data-.*\.json$/.test(f)).sort();
+}
+
+function sha256(buf) {
+  return crypto.createHash('sha256').update(buf).digest('hex');
+}
+
+// Respalda el estado leido antes de cualquier PUT.
+// Omite la escritura si es identica al respaldo anterior: el ciclo corre cada
+// ~3 min y el cuerpo casi nunca cambia (el 2026-08-25 habia 6144 copias de
+// 183352 bytes exactos, 1.1 GB). Con force siempre escribe (retire-task).
+function writeBackup(config, body, { force = false } = {}) {
+  const dir = backupsDir(config);
   fs.mkdirSync(dir, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  fs.writeFileSync(path.join(dir, `data-${stamp}.json`), body);
-  const cutoff = Date.now() - (config.backup_retention_days ?? 14) * 24 * 3600 * 1000;
-  for (const file of fs.readdirSync(dir)) {
-    const full = path.join(dir, file);
-    if (fs.statSync(full).mtimeMs < cutoff) fs.unlinkSync(full);
+  if (!force) {
+    const previo = listBackups(dir).pop();
+    if (previo) {
+      try {
+        if (sha256(fs.readFileSync(path.join(dir, previo))) === sha256(body)) return null;
+      } catch (err) {
+        // Si no se puede leer el anterior, respaldamos igual.
+      }
+    }
   }
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const destino = path.join(dir, `data-${stamp}.json`);
+  fs.writeFileSync(destino, body);
+  return destino;
+}
+
+// Limpieza de disco. NUNCA debe abortar el ciclo: que una rotacion fallida
+// tumbara la reconciliacion 15 dias (2026-08-10 -> 2026-08-25) fue un problema
+// de acoplamiento, no de unlink. Por eso no lanza y corre DESPUES de runCycle.
+function rotateBackups(config, log = () => {}) {
+  const dir = backupsDir(config);
+  const horas = config.backup_retention_hours
+    ?? (config.backup_retention_days ?? 14) * 24;
+  const cutoff = Date.now() - horas * 3600 * 1000;
+  let borrados = 0;
+  try {
+    for (const file of listBackups(dir)) {
+      const full = path.join(dir, file);
+      try {
+        const st = fs.statSync(full);
+        if (st.isFile() && st.mtimeMs < cutoff) {
+          fs.unlinkSync(full);
+          borrados += 1;
+        }
+      } catch (err) {
+        log(`rotacion: se omite ${file}: ${err.message}`);
+      }
+    }
+  } catch (err) {
+    log(`rotacion: no se pudo listar ${dir}: ${err.message}`);
+  }
+  return borrados;
 }
 
 async function commandReconcile({ dryRun }) {
@@ -76,7 +130,7 @@ async function commandReconcile({ dryRun }) {
     // Backup del estado leído antes de cualquier posible PUT del ciclo.
     if (!dryRun) {
       const current = await webdav.get();
-      backupBody(config, current.body);
+      writeBackup(config, current.body);
     }
     const result = await runCycle({
       config,
@@ -88,6 +142,8 @@ async function commandReconcile({ dryRun }) {
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     if (result.status === 'error') process.exitCode = 1;
+    // Despues del ciclo y aislada: la limpieza no puede tumbar la reconciliacion.
+    if (!dryRun) rotateBackups(config, (m) => process.stderr.write(`${m}\n`));
   } finally {
     await pool.end();
   }
@@ -137,7 +193,7 @@ async function commandRetireTask(taskIdRaw) {
       }
     }
     const fetched = await webdav.get();
-    backupBody(config, fetched.body);
+    writeBackup(config, fetched.body, { force: true });
     const data = model.parseData(fetched.body);
     const index = data.tasks.findIndex((item) => item.id === mapping.mindwtr_task_id);
     if (index >= 0) {
