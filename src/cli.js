@@ -5,10 +5,10 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { createPool } = require('./lib/database');
-const { AnytypeClient } = require('./anytype-client');
 const { VikunjaClient } = require('./vikunja-client');
-const { WebdavClient } = require('./webdav-client');
+const { WebdavClient, WebdavError } = require('./webdav-client');
 const { runCycle, findAnytypeRoot, buildSubtree } = require('./reconcile');
 const gtd = require('./gtd-mapping');
 const model = require('./mindwtr-model');
@@ -40,14 +40,6 @@ function loadConfig() {
     : path.join(path.dirname(configPath), '..', config.secrets_dir ?? 'secrets');
 
   const readSecret = (name) => fs.readFileSync(path.join(secretsDir, name), 'utf8').trim();
-  const readOptionalSecret = (name) => {
-    try {
-      return readSecret(name);
-    } catch {
-      return null;
-    }
-  };
-
   const [webdavUser, ...webdavPassParts] = readSecret('webdav-credentials').split(':');
   return {
     config,
@@ -55,70 +47,133 @@ function loadConfig() {
     webdavUser,
     webdavPass: webdavPassParts.join(':'),
     postgresUrl: readSecret('postgres-url'),
-    anytypeApiKey: readOptionalSecret('anytype-api-key'),
   };
 }
 
 function buildContext() {
-  const { config, vikunjaToken, webdavUser, webdavPass, postgresUrl, anytypeApiKey } = loadConfig();
+  const { config, vikunjaToken, webdavUser, webdavPass, postgresUrl } = loadConfig();
   const pool = createPool({ connectionString: postgresUrl });
   const vikunja = new VikunjaClient({ baseUrl: config.vikunja_base_url, token: vikunjaToken });
   const webdav = new WebdavClient({ url: config.webdav_url, username: webdavUser, password: webdavPass });
 
-  // Carril de captura: requiere la API de Anytype y lectura-solo de la BD de
-  // atvk. Si falta el secreto, el bridge opera sin captura (aviso, no error).
-  let anytype = null;
-  let atvkPool = null;
-  if (config.enable_capture && anytypeApiKey) {
-    anytype = new AnytypeClient({
-      baseUrl: config.anytype_api_url,
-      token: anytypeApiKey,
-      version: config.anytype_api_version,
-    });
-    const atvkUrl = postgresUrl.replace(/\/[^/?]+(\?.*)?$/, `/${config.atvk_db_name ?? 'anytype_sync'}$1`);
-    atvkPool = createPool({ connectionString: atvkUrl });
-  } else if (config.enable_capture) {
-    process.stderr.write('⚠ enable_capture sin secrets/anytype-api-key: carril de captura desactivado este ciclo.\n');
-  }
-
-  return { config, pool, vikunja, webdav, anytype, atvkPool };
+  return { config, pool, vikunja, webdav };
 }
 
-function backupBody(config, body) {
-  const dir = config.backups_dir || path.join(__dirname, '..', 'backups');
+function backupsDir(config) {
+  return config.backups_dir || path.join(__dirname, '..', 'backups');
+}
+
+// Solo los respaldos que genera este modulo. El 2026-08-10 un directorio ajeno
+// en backups/ (pre-safe-descriptions-...) hizo que unlinkSync lanzara EISDIR.
+function listBackups(dir) {
+  return fs.readdirSync(dir).filter((f) => /^data-.*\.json$/.test(f)).sort();
+}
+
+function sha256(buf) {
+  return crypto.createHash('sha256').update(buf).digest('hex');
+}
+
+// Respalda el estado leido antes de cualquier PUT.
+// Omite la escritura si es identica al respaldo anterior: el ciclo corre cada
+// ~3 min y el cuerpo casi nunca cambia (el 2026-08-25 habia 6144 copias de
+// 183352 bytes exactos, 1.1 GB). Con force siempre escribe (retire-task).
+function writeBackup(config, body, { force = false } = {}) {
+  const dir = backupsDir(config);
   fs.mkdirSync(dir, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  fs.writeFileSync(path.join(dir, `data-${stamp}.json`), body);
-  const cutoff = Date.now() - (config.backup_retention_days ?? 14) * 24 * 3600 * 1000;
-  for (const file of fs.readdirSync(dir)) {
-    const full = path.join(dir, file);
-    if (fs.statSync(full).mtimeMs < cutoff) fs.unlinkSync(full);
+  if (!force) {
+    const previo = listBackups(dir).pop();
+    if (previo) {
+      try {
+        if (sha256(fs.readFileSync(path.join(dir, previo))) === sha256(body)) return null;
+      } catch (err) {
+        // Si no se puede leer el anterior, respaldamos igual.
+      }
+    }
   }
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const destino = path.join(dir, `data-${stamp}.json`);
+  fs.writeFileSync(destino, body);
+  return destino;
+}
+
+// Limpieza de disco. NUNCA debe abortar el ciclo: que una rotacion fallida
+// tumbara la reconciliacion 15 dias (2026-08-10 -> 2026-08-25) fue un problema
+// de acoplamiento, no de unlink. Por eso no lanza y corre DESPUES de runCycle.
+function rotateBackups(config, log = () => {}) {
+  const dir = backupsDir(config);
+  const horas = config.backup_retention_hours
+    ?? (config.backup_retention_days ?? 14) * 24;
+  const cutoff = Date.now() - horas * 3600 * 1000;
+  let borrados = 0;
+  try {
+    for (const file of listBackups(dir)) {
+      const full = path.join(dir, file);
+      try {
+        const st = fs.statSync(full);
+        if (st.isFile() && st.mtimeMs < cutoff) {
+          fs.unlinkSync(full);
+          borrados += 1;
+        }
+      } catch (err) {
+        log(`rotacion: se omite ${file}: ${err.message}`);
+      }
+    }
+  } catch (err) {
+    log(`rotacion: no se pudo listar ${dir}: ${err.message}`);
+  }
+  return borrados;
+}
+
+// Una lectura fallida de data.json no justifica tumbar la unidad: el ciclo vuelve
+// en ~3 min y el estado remoto sigue intacto. Misma regla que rotateBackups y que
+// skipped_maintenance. Solo se omite ante fallos PASAJEROS; un 401/403/404 es
+// configuracion rota o el archivo movido, y debe seguir fallando fuerte y visible.
+// (2026-08-26: 19 fallos por "GET data.json respondio HTTP 502" mientras Nextcloud
+// estaba de rodillas por el bucle OOM de eurooffice, ninguno culpa del bridge.)
+function esFalloPasajero(err) {
+  if (!err) return false;
+  if (err instanceof WebdavError) return err.status >= 500 || err.status === 429;
+  if (err.name === 'TimeoutError' || err.name === 'AbortError') return true;
+  // undici envuelve los fallos de red en un TypeError con .cause
+  return err.name === 'TypeError' && /fetch failed/i.test(err.message || '');
 }
 
 async function commandReconcile({ dryRun }) {
-  const { config, pool, vikunja, webdav, anytype, atvkPool } = buildContext();
+  const { config, pool, vikunja, webdav } = buildContext();
   try {
     // Backup del estado leído antes de cualquier posible PUT del ciclo.
     if (!dryRun) {
-      const current = await webdav.get();
-      backupBody(config, current.body);
+      let current;
+      try {
+        current = await webdav.get();
+      } catch (err) {
+        if (!esFalloPasajero(err)) throw err;
+        process.stderr.write(`lectura de data.json no disponible: ${err.message}\n`);
+        process.stdout.write(`${JSON.stringify({
+          ok: true,
+          status: 'skipped_transient',
+          vikunja_writes: 0,
+          mindwtr_mutations: 0,
+          reason: err.message,
+        }, null, 2)}\n`);
+        return undefined;
+      }
+      writeBackup(config, current.body);
     }
     const result = await runCycle({
       config,
       pool,
       vikunja,
       webdav,
-      anytype,
-      atvkPool,
       dryRun,
       log: (message) => process.stderr.write(`${message}\n`),
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     if (result.status === 'error') process.exitCode = 1;
+    // Despues del ciclo y aislada: la limpieza no puede tumbar la reconciliacion.
+    if (!dryRun) rotateBackups(config, (m) => process.stderr.write(`${m}\n`));
   } finally {
     await pool.end();
-    if (atvkPool) await atvkPool.end();
   }
 }
 
@@ -166,7 +221,7 @@ async function commandRetireTask(taskIdRaw) {
       }
     }
     const fetched = await webdav.get();
-    backupBody(config, fetched.body);
+    writeBackup(config, fetched.body, { force: true });
     const data = model.parseData(fetched.body);
     const index = data.tasks.findIndex((item) => item.id === mapping.mindwtr_task_id);
     if (index >= 0) {
@@ -272,4 +327,5 @@ if (require.main === module) {
 module.exports = {
   maintenanceFilePath,
   maintenanceStatus,
+  esFalloPasajero,
 };

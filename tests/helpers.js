@@ -40,13 +40,14 @@ function makeFakeDb(seed = {}) {
       if (text.startsWith('SELECT * FROM capture_map')) return { rows: state.capture_map };
       if (text.startsWith('INSERT INTO capture_map')) {
         nextCaptureId += 1;
+        const direct = text.includes("VALUES ('mindwtr'");
         state.capture_map.push({
           id: nextCaptureId,
-          origin: params[0],
-          kind: params[1],
-          mindwtr_id: params[2],
-          vikunja_id: params[3],
-          anytype_space_id: params[4],
+          origin: direct ? 'mindwtr' : params[0],
+          kind: direct ? params[0] : params[1],
+          mindwtr_id: direct ? params[1] : params[2],
+          vikunja_id: direct ? null : params[3],
+          anytype_space_id: direct ? null : params[4],
           anytype_object_id: null,
           state: 'creating',
           created_at: new Date().toISOString(),
@@ -67,6 +68,21 @@ function makeFakeDb(seed = {}) {
         const match = text.match(/state = '(\w+)'/);
         const row = state.task_map.find((item) => Number(item.vikunja_task_id) === Number(params[0]));
         if (row) row.state = match[1];
+        return { rows: [] };
+      }
+      if (text.startsWith('UPDATE task_map SET provenance_marker')) {
+        const row = state.task_map.find((item) => Number(item.vikunja_task_id) === Number(params[0]));
+        if (row && !row.provenance_marker) row.provenance_marker = params[1];
+        return { rows: [] };
+      }
+      if (text.startsWith('UPDATE task_map SET vikunja_task_id')) {
+        const row = state.task_map.find((item) => Number(item.vikunja_task_id) === Number(params[0]));
+        if (row) {
+          row.vikunja_task_id = Number(params[1]);
+          for (const field of state.task_field_state) {
+            if (Number(field.vikunja_task_id) === Number(params[0])) field.vikunja_task_id = Number(params[1]);
+          }
+        }
         return { rows: [] };
       }
       if (text.startsWith('DELETE FROM task_map')) {
@@ -172,8 +188,12 @@ function makeFakeAnytype() {
 }
 
 function makeFakeVikunja({ projects, tasksByProject, labels }) {
-  const calls = { updateTask: [], addLabel: [], removeLabel: [], createLabel: [], updateProject: [] };
+  const calls = {
+    updateTask: [], addLabel: [], removeLabel: [], createLabel: [], updateProject: [],
+    createProject: [], createTask: [],
+  };
   let nextLabelId = 1000;
+  let nextProjectId = Math.max(0, ...projects.map((project) => Number(project.id))) + 1;
   const allLabels = [...labels];
   const flatTasks = new Map();
   for (const list of Object.values(tasksByProject)) {
@@ -190,6 +210,28 @@ function makeFakeVikunja({ projects, tasksByProject, labels }) {
       const created = { id: nextLabelId += 1, ...label };
       allLabels.push(created);
       calls.createLabel.push(created);
+      return created;
+    },
+    async createProject(project) {
+      const created = { id: nextProjectId += 1, created: new Date().toISOString(), ...project };
+      projects.push(created);
+      tasksByProject[created.id] = [];
+      calls.createProject.push(created);
+      return created;
+    },
+    async createTask(projectId, task) {
+      const nextTaskId = Math.max(0, ...flatTasks.keys()) + 1;
+      const created = {
+        id: nextTaskId,
+        project_id: Number(projectId),
+        labels: [],
+        created: new Date().toISOString(),
+        ...task,
+      };
+      if (!tasksByProject[projectId]) tasksByProject[projectId] = [];
+      tasksByProject[projectId].push(created);
+      flatTasks.set(created.id, created);
+      calls.createTask.push({ projectId: Number(projectId), task: created });
       return created;
     },
     async addLabel(taskId, labelId) { calls.addLabel.push({ taskId, labelId }); },

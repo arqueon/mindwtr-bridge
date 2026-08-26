@@ -80,6 +80,10 @@ class VikunjaClient {
     return this.listPaginated('projects');
   }
 
+  async createProject(project) {
+    return (await this.request('projects', { method: 'PUT', body: project })).data;
+  }
+
   async listProjectTasks(projectId, query = {}) {
     return this.listPaginated(`projects/${projectId}/tasks`, query);
   }
@@ -91,6 +95,13 @@ class VikunjaClient {
       if (error instanceof HttpError && error.status === 404) return null;
       throw error;
     }
+  }
+
+  async createTask(projectId, task) {
+    return (await this.request(`projects/${projectId}/tasks`, {
+      method: 'PUT',
+      body: task,
+    })).data;
   }
 
   async updateTask(task, changes) {
