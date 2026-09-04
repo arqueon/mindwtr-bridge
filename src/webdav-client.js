@@ -16,7 +16,10 @@ class WebdavError extends Error {
 
 function normalizeEtag(raw) {
   if (!raw) return null;
-  return raw.replace(/^W\//, '').replace(/^"|"$/g, '');
+  return raw
+    .replace(/^W\//, '')
+    .replace(/^"|"$/g, '')
+    .replace(/-(?:gzip|br|deflate)$/, '');
 }
 
 class WebdavClient {
@@ -29,7 +32,10 @@ class WebdavClient {
   async get() {
     const response = await fetch(this.url, {
       method: 'GET',
-      headers: { authorization: this.auth },
+      headers: {
+        authorization: this.auth,
+        'accept-encoding': 'identity',
+      },
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (!response.ok) {
@@ -41,7 +47,7 @@ class WebdavClient {
     const body = await response.text();
     return {
       body,
-      etag: normalizeEtag(response.headers.get('etag') || response.headers.get('oc-etag')),
+      etag: normalizeEtag(response.headers.get('oc-etag') || response.headers.get('etag')),
     };
   }
 
